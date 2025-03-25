@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -85,7 +84,7 @@ const MathTankMania = () => {
     }
   }, [coins, tankPosition, tankVerticalPosition, toast]);
 
-  // Fix 3: Auto-forward movement (fixed direction)
+  // Fix 3: Auto-forward movement (correct direction)
   useEffect(() => {
     if (gameOver || isPaused) return;
 
