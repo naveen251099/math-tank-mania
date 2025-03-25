@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
@@ -40,7 +40,52 @@ const MathTankMania = () => {
   const gameAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
-  // Auto-forward movement
+  // Fix 1: Generate coins with proper structure including collected flag
+  function generateCoins() {
+    const newCoins = [];
+    // Generate 10 coins randomly
+    for (let i = 0; i < 10; i++) {
+      newCoins.push({
+        id: i,
+        x: Math.floor(Math.random() * 5),  // 0-4 horizontal
+        y: Math.floor(Math.random() * 9) + 1, // 1-9 vertical
+        collected: false
+      });
+    }
+    return newCoins;
+  }
+
+  // Fix 2: Improve coin collection logic
+  const checkCoinCollection = useCallback(() => {
+    let coinCollected = false;
+    
+    const updatedCoins = coins.map(coin => {
+      // Check if the tank is near a coin
+      if (
+        !coin.collected && 
+        coin.x === tankPosition && 
+        Math.abs(coin.y - tankVerticalPosition) < 0.5
+      ) {
+        // Collect the coin
+        coinCollected = true;
+        return { ...coin, collected: true };
+      }
+      return coin;
+    });
+    
+    if (coinCollected) {
+      setCoins(updatedCoins);
+      setScore(prev => prev + 50);
+      playSound('coin');
+      toast({
+        title: "Coin Collected!",
+        description: "+50 points",
+        duration: 1000
+      });
+    }
+  }, [coins, tankPosition, tankVerticalPosition, toast]);
+
+  // Fix 3: Auto-forward movement (fixed direction)
   useEffect(() => {
     if (gameOver || isPaused) return;
 
@@ -70,45 +115,7 @@ const MathTankMania = () => {
     }, 100);
 
     return () => clearInterval(movementInterval);
-  }, [gameOver, isPaused, villainStrength, tankPosition]);
-
-  function generateCoins() {
-    const newCoins = [];
-    // Generate 10 coins randomly
-    for (let i = 0; i < 10; i++) {
-      newCoins.push({
-        id: i,
-        x: Math.floor(Math.random() * 5),  // 0-4 horizontal
-        y: Math.floor(Math.random() * 9) + 1, // 1-9 vertical
-        collected: false
-      });
-    }
-    return newCoins;
-  }
-
-  function checkCoinCollection() {
-    const updatedCoins = coins.map(coin => {
-      // Check if the tank is near a coin
-      if (
-        !coin.collected && 
-        coin.x === tankPosition && 
-        Math.abs(coin.y - tankVerticalPosition) < 0.5
-      ) {
-        // Collect the coin
-        setScore(prev => prev + 50);
-        playSound('coin');
-        toast({
-          title: "Coin Collected!",
-          description: "+50 points",
-          duration: 1000
-        });
-        return { ...coin, collected: true };
-      }
-      return coin;
-    });
-    
-    setCoins(updatedCoins);
-  }
+  }, [gameOver, isPaused, villainStrength, tankPosition, checkCoinCollection]);
 
   const handleLevelComplete = () => {
     setShowLevelComplete(true);
