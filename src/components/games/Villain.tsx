@@ -3,21 +3,16 @@ import React from 'react';
 
 interface VillainProps {
   strength: number;
-  tankPosition: number;
 }
 
-export const Villain: React.FC<VillainProps> = ({ strength, tankPosition }) => {
+export const Villain: React.FC<VillainProps> = ({ strength }) => {
   // Only show villain if strength > 0
   if (strength <= 0) return null;
   
   return (
     <div 
       className="absolute top-0 left-1/2 transform -translate-x-1/2 z-10"
-      style={{ 
-        top: '120px',
-        transform: `translateX(-50%) translateY(${-tankPosition * 40}px)`,
-        transition: 'transform 0.1s linear'
-      }}
+      style={{ top: '120px' }}
     >
       <div className="relative">
         {/* Villain Body */}

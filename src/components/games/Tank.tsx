@@ -5,14 +5,16 @@ interface TankProps {
   position: number;
   health: number;
   isMoving: boolean;
+  isHit: boolean;
 }
 
-export const Tank: React.FC<TankProps> = ({ position, health, isMoving }) => {
+export const Tank: React.FC<TankProps> = ({ position, health, isMoving, isHit }) => {
   return (
     <div 
       className={`
-        absolute left-0 bottom-8 transition-all duration-200
+        absolute bottom-8 transition-all duration-200
         ${isMoving ? 'animate-[bounce_1s_ease-in-out_infinite]' : ''}
+        ${isHit ? 'animate-[shake_0.2s_ease-in-out_0s_3]' : ''}
       `}
       style={{ 
         left: `${position * 25}%`,

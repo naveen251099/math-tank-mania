@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -10,11 +11,25 @@ import { GameOverDialog } from "./GameOverDialog";
 import { Tank } from "./Tank";
 import { Villain } from "./Villain";
 import { Coin } from "./Coin";
-import { generateDivisionProblem } from "@/utils/gameUtils";
+import { 
+  generateDivisionProblem, 
+  checkCollision, 
+  generateInitialMines, 
+  generateCoins 
+} from "@/utils/gameUtils";
 import { 
   Volume2, VolumeX, Play, Pause, 
   Medal, Heart, Shield, RotateCcw, Menu
 } from "lucide-react";
+
+// Define a type for our mine objects
+interface Mine {
+  value: number;
+  x: number;
+  y: number;
+  isCorrect: boolean;
+  isHit: boolean;
+}
 
 const MathTankMania = () => {
   // Game states
@@ -29,181 +44,284 @@ const MathTankMania = () => {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [musicEnabled, setMusicEnabled] = useState(true);
   const [tankPosition, setTankPosition] = useState(2); // 0-4 horizontal position
-  const [tankVerticalPosition, setTankVerticalPosition] = useState(0);
-  const [selectedMine, setSelectedMine] = useState<number | null>(null);
-  const [wrongAnswerFeedback, setWrongAnswerFeedback] = useState(false);
-  const [correctAnswerFeedback, setCorrectAnswerFeedback] = useState(false);
+  const [tankIsHit, setTankIsHit] = useState(false);
   const [showLevelComplete, setShowLevelComplete] = useState(false);
+  
+  // New state for falling mines and coins
+  const [mines, setMines] = useState<Mine[]>(
+    generateInitialMines(currentProblem.correctAnswer, currentProblem.options)
+  );
   const [coins, setCoins] = useState(generateCoins());
   
   const gameAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+  const animationFrameRef = useRef<number | null>(null);
+  const lastTimeRef = useRef<number>(0);
+  const gameSpeedRef = useRef<number>(1);
 
-  // Fix 1: Generate coins with proper structure including collected flag
-  function generateCoins() {
-    const newCoins = [];
-    // Generate 10 coins randomly
-    for (let i = 0; i < 10; i++) {
-      newCoins.push({
-        id: i,
-        x: Math.floor(Math.random() * 5),  // 0-4 horizontal
-        y: Math.floor(Math.random() * 9) + 1, // 1-9 vertical
-        collected: false
-      });
-    }
-    return newCoins;
-  }
+  // Initialize or reset the game
+  const resetGame = useCallback(() => {
+    const newProblem = generateDivisionProblem(level);
+    setCurrentProblem(newProblem);
+    setMines(generateInitialMines(newProblem.correctAnswer, newProblem.options));
+    setCoins(generateCoins());
+  }, [level]);
 
-  // Fix 2: Improve coin collection logic
-  const checkCoinCollection = useCallback(() => {
-    let coinCollected = false;
-    
-    const updatedCoins = coins.map(coin => {
-      // Check if the tank is near a coin
-      if (
-        !coin.collected && 
-        coin.x === tankPosition && 
-        Math.abs(coin.y - tankVerticalPosition) < 0.5
-      ) {
-        // Collect the coin
-        coinCollected = true;
-        return { ...coin, collected: true };
+  // Initialize game on mount
+  useEffect(() => {
+    resetGame();
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
       }
-      return coin;
+    };
+  }, [resetGame]);
+
+  // Game animation loop
+  const gameLoop = useCallback((timestamp: number) => {
+    if (isPaused || gameOver) {
+      animationFrameRef.current = requestAnimationFrame(gameLoop);
+      return;
+    }
+
+    // Calculate delta time
+    const deltaTime = lastTimeRef.current ? (timestamp - lastTimeRef.current) / 16.67 : 1;
+    lastTimeRef.current = timestamp;
+
+    // Move mines downward
+    setMines(prevMines => {
+      const newMines = prevMines.map(mine => {
+        // Move mines down
+        const newY = mine.y + (2 * gameSpeedRef.current * deltaTime);
+        
+        // Check for collision with tank
+        const mineObj = { 
+          x: mine.x, 
+          y: newY, 
+          width: 80, // Approximate mine width in pixels
+          height: 80 // Approximate mine height in pixels
+        };
+        
+        const tankObj = {
+          position: tankPosition,
+          width: 80 // Approximate tank width in pixels
+        };
+        
+        const hasCollided = checkCollision(tankObj, mineObj);
+        
+        // Handle collision if not already hit
+        if (hasCollided && !mine.isHit) {
+          if (mine.isCorrect) {
+            // Correct mine hit
+            handleCorrectMineHit();
+          } else {
+            // Wrong mine hit
+            handleWrongMineHit();
+          }
+          
+          return { 
+            ...mine, 
+            isHit: true,
+            y: newY
+          };
+        }
+        
+        return { 
+          ...mine, 
+          y: newY
+        };
+      });
+      
+      // Remove mines that are off-screen
+      const visibleMines = newMines.filter(mine => mine.y < window.innerHeight + 200);
+      
+      // Add new mines if needed
+      if (visibleMines.length < 3 && !gameOver) {
+        const newOptions = [...currentProblem.options];
+        for (let i = visibleMines.length; i < 5; i++) {
+          visibleMines.push({
+            value: newOptions[i] || Math.floor(Math.random() * 50) + 1,
+            x: Math.floor(Math.random() * 5),
+            y: -100 - Math.random() * 300,
+            isCorrect: newOptions[i] === currentProblem.correctAnswer,
+            isHit: false
+          });
+        }
+      }
+      
+      return visibleMines;
     });
     
-    if (coinCollected) {
-      setCoins(updatedCoins);
-      setScore(prev => prev + 50);
-      playSound('coin');
-      toast({
-        title: "Coin Collected!",
-        description: "+50 points",
-        duration: 1000
-      });
-    }
-  }, [coins, tankPosition, tankVerticalPosition, toast]);
-
-  // Fix 3: Auto-forward movement (correct direction)
-  useEffect(() => {
-    if (gameOver || isPaused) return;
-
-    const movementInterval = setInterval(() => {
-      setTankVerticalPosition(prev => {
-        const newPosition = prev + 0.05; // Slower movement
+    // Move coins downward
+    setCoins(prevCoins => {
+      const newCoins = prevCoins.map(coin => {
+        // Move coins down
+        const newY = coin.y + (2 * gameSpeedRef.current * deltaTime);
         
-        // Check for coin collection
-        checkCoinCollection();
-        
-        // Check if tank has reached the end of the level
-        if (newPosition >= 10) {
-          if (villainStrength > 0) {
-            // Tank reaches end without defeating villain
-            setGameOver(true);
-            setGameResult('lose');
-            playSound('gameOver');
-            return prev;
-          } else {
-            // Move to next level
-            handleLevelComplete();
-            return 0; // Reset position
+        // Check for collision with tank if not already collected
+        if (!coin.collected) {
+          const coinObj = { 
+            x: coin.x, 
+            y: newY, 
+            width: 40, // Approximate coin width in pixels
+            height: 40 // Approximate coin height in pixels
+          };
+          
+          const tankObj = {
+            position: tankPosition,
+            width: 80 // Approximate tank width in pixels
+          };
+          
+          const hasCollided = checkCollision(tankObj, coinObj);
+          
+          if (hasCollided) {
+            // Collect coin
+            playSound('coin');
+            setScore(prev => prev + 50);
+            toast({
+              title: "Coin Collected!",
+              description: "+50 points",
+              duration: 1000
+            });
+            
+            return { ...coin, collected: true, y: newY };
           }
         }
-        return newPosition;
+        
+        return { ...coin, y: newY };
       });
-    }, 100);
+      
+      // Remove coins that are off-screen
+      const visibleCoins = newCoins.filter(coin => 
+        !coin.collected && coin.y < window.innerHeight + 100
+      );
+      
+      // Add new coins if needed
+      if (visibleCoins.length < 5 && !gameOver) {
+        for (let i = visibleCoins.length; i < 10; i++) {
+          visibleCoins.push({
+            id: Date.now() + i,
+            x: Math.floor(Math.random() * 5),
+            y: -100 - Math.random() * 300,
+            collected: false
+          });
+        }
+      }
+      
+      return visibleCoins;
+    });
+    
+    // Check for level completion
+    if (villainStrength <= 0) {
+      handleLevelComplete();
+    }
+    
+    // Continue the game loop
+    animationFrameRef.current = requestAnimationFrame(gameLoop);
+  }, [isPaused, gameOver, tankPosition, currentProblem.correctAnswer, currentProblem.options, villainStrength]);
 
-    return () => clearInterval(movementInterval);
-  }, [gameOver, isPaused, villainStrength, tankPosition, checkCoinCollection]);
+  // Start/continue game loop
+  useEffect(() => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    
+    lastTimeRef.current = 0;
+    animationFrameRef.current = requestAnimationFrame(gameLoop);
+    
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [gameLoop]);
 
-  const handleLevelComplete = () => {
+  // Handle a correct mine hit
+  const handleCorrectMineHit = useCallback(() => {
+    // Reduce villain strength
+    setVillainStrength(prev => {
+      const newStrength = Math.max(0, prev - 1);
+      
+      if (newStrength === 0) {
+        playSound('victory');
+      }
+      
+      return newStrength;
+    });
+    
+    // Increase score
+    setScore(prev => prev + 100);
+    
+    // Show toast
+    toast({
+      title: "Correct!",
+      description: "+100 points",
+      duration: 1500
+    });
+    
+    playSound('correct');
+    
+    // Generate new problem
+    setTimeout(() => {
+      const newProblem = generateDivisionProblem(level);
+      setCurrentProblem(newProblem);
+    }, 1000);
+  }, [level, toast]);
+
+  // Handle a wrong mine hit
+  const handleWrongMineHit = useCallback(() => {
+    // Reduce tank health
+    setTankHealth(prev => {
+      const newHealth = Math.max(0, prev - 1);
+      
+      // Check if tank is destroyed
+      if (newHealth === 0) {
+        setGameOver(true);
+        setGameResult('lose');
+        playSound('gameOver');
+      }
+      
+      return newHealth;
+    });
+    
+    // Show hit effect
+    setTankIsHit(true);
+    setTimeout(() => setTankIsHit(false), 800);
+    
+    // Show toast
+    toast({
+      title: "Incorrect!",
+      description: "Try again!",
+      variant: "destructive",
+      duration: 1500
+    });
+    
+    playSound('wrong');
+  }, [toast]);
+
+  const handleLevelComplete = useCallback(() => {
     setShowLevelComplete(true);
     playSound('levelUp');
+    
+    // Pause the game briefly
+    setIsPaused(true);
     
     // Continue to next level after a delay
     setTimeout(() => {
       setLevel(prev => prev + 1);
       setVillainStrength(6 + Math.floor(level / 2)); // Increase difficulty
-      setTankVerticalPosition(0);
-      setCoins(generateCoins());
+      setIsPaused(false);
       setShowLevelComplete(false);
       
-      // Make division problems slightly harder as levels progress
-      setCurrentProblem(generateDivisionProblem(level));
+      // Increase game speed slightly for higher levels
+      gameSpeedRef.current = 1 + (level * 0.1);
+      
+      // Reset game state for new level
+      resetGame();
     }, 2000);
-  };
+  }, [level, resetGame]);
 
-  const handleMineSelection = (selectedAnswer: number) => {
-    if (gameOver || isPaused) return;
-
-    setSelectedMine(selectedAnswer);
-
-    if (selectedAnswer === currentProblem.correctAnswer) {
-      // Correct answer
-      setScore(prev => prev + 100);
-      setCorrectAnswerFeedback(true);
-      playSound('correct');
-      
-      toast({
-        title: "Correct!",
-        description: "+100 points",
-        duration: 1500
-      });
-      
-      // Reduce villain strength
-      setVillainStrength(prev => {
-        const newStrength = Math.max(0, prev - 1);
-        
-        // Check if villain is defeated
-        if (newStrength === 0) {
-          playSound('victory');
-          // We don't set game over here, but at the end of the level
-        }
-        
-        return newStrength;
-      });
-      
-      // Reset feedback and generate new problem after a short delay
-      setTimeout(() => {
-        setCorrectAnswerFeedback(false);
-        setSelectedMine(null);
-        setCurrentProblem(generateDivisionProblem(level));
-      }, 1000);
-    } else {
-      // Wrong answer
-      setWrongAnswerFeedback(true);
-      playSound('wrong');
-      
-      toast({
-        title: "Incorrect!",
-        description: "Try again!",
-        variant: "destructive",
-        duration: 1500
-      });
-      
-      // Reduce tank health
-      setTankHealth(prev => {
-        const newHealth = Math.max(0, prev - 1);
-        
-        // Check if tank is destroyed
-        if (newHealth === 0) {
-          setGameOver(true);
-          setGameResult('lose');
-          playSound('gameOver');
-        }
-        
-        return newHealth;
-      });
-
-      // Reset wrong answer feedback after a short delay
-      setTimeout(() => {
-        setWrongAnswerFeedback(false);
-        setSelectedMine(null);
-      }, 800);
-    }
-  };
-
-  const handleTankMove = (direction: 'left' | 'right') => {
+  const handleTankMove = useCallback((direction: 'left' | 'right') => {
     if (gameOver || isPaused) return;
 
     setTankPosition(prev => {
@@ -214,46 +332,48 @@ const MathTankMania = () => {
     });
     
     playSound('move');
-  };
+  }, [gameOver, isPaused]);
 
-  const handlePause = () => {
+  const handlePause = useCallback(() => {
     setIsPaused(prev => !prev);
     playSound('click');
-  };
+  }, []);
 
-  const handleRestart = () => {
+  const handleRestart = useCallback(() => {
     // Reset all game states
     setLevel(1);
     setScore(0);
     setTankHealth(3);
     setVillainStrength(6);
-    setCurrentProblem(generateDivisionProblem());
     setGameOver(false);
     setGameResult(null);
     setIsPaused(false);
     setTankPosition(2);
-    setTankVerticalPosition(0);
-    setCoins(generateCoins());
-    setWrongAnswerFeedback(false);
-    setCorrectAnswerFeedback(false);
+    setTankIsHit(false);
+    setShowLevelComplete(false);
+    gameSpeedRef.current = 1;
+    
+    // Reset game elements
+    resetGame();
+    
     playSound('restart');
-  };
+  }, [resetGame]);
   
-  const toggleSound = () => {
+  const toggleSound = useCallback(() => {
     setSoundEnabled(prev => !prev);
-  };
+  }, []);
   
-  const toggleMusic = () => {
+  const toggleMusic = useCallback(() => {
     setMusicEnabled(prev => !prev);
-  };
+  }, []);
   
-  const playSound = (type: 'correct' | 'wrong' | 'coin' | 'move' | 'gameOver' | 'victory' | 'click' | 'restart' | 'levelUp') => {
+  const playSound = useCallback((type: 'correct' | 'wrong' | 'coin' | 'move' | 'gameOver' | 'victory' | 'click' | 'restart' | 'levelUp') => {
     if (!soundEnabled) return;
     
     // This would ideally play actual sounds
     console.log(`Playing sound: ${type}`);
     // Here we would use the Web Audio API or a library like Howler.js
-  };
+  }, [soundEnabled]);
 
   // Handle keyboard controls
   useEffect(() => {
@@ -277,7 +397,7 @@ const MathTankMania = () => {
     
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [gameOver, isPaused]);
+  }, [gameOver, handlePause, handleTankMove]);
 
   return (
     <div className="bg-gradient-to-b from-green-900 to-green-800 p-6 rounded-xl shadow-xl relative h-[600px] w-full max-w-3xl mx-auto flex flex-col">
@@ -319,9 +439,7 @@ const MathTankMania = () => {
         ref={gameAreaRef}
         className={`
           flex-grow relative overflow-hidden rounded-lg border-4 border-green-950
-          ${wrongAnswerFeedback ? 'bg-red-600' : ''}
-          ${correctAnswerFeedback ? 'bg-green-600' : ''}
-          ${!wrongAnswerFeedback && !correctAnswerFeedback ? 'bg-gradient-to-b from-green-600 to-green-700' : ''}
+          ${tankIsHit ? 'bg-red-600' : 'bg-gradient-to-b from-green-600 to-green-700'}
         `}
         style={{ transition: 'background-color 0.3s ease' }}
       >
@@ -374,9 +492,8 @@ const MathTankMania = () => {
               className="absolute top-0 bottom-0 w-0.5 bg-green-500 opacity-30"
               style={{ 
                 left: `${lane * 25}%`,
-                transform: `translateX(${lane === 0 ? 0 : -50}%) translateY(${-tankVerticalPosition * 40}px)`,
-                height: '2000px',
-                transition: 'transform 0.1s linear'
+                transform: `translateX(${lane === 0 ? 0 : -50}%)`,
+                height: '100%'
               }}
             />
           ))}
@@ -386,46 +503,32 @@ const MathTankMania = () => {
             <div 
               key={i}
               className="absolute left-0 right-0 h-8 bg-green-800 opacity-20"
-              style={{ 
-                top: `${i * 60}px`,
-                transform: `translateY(${-tankVerticalPosition * 40}px)`,
-                transition: 'transform 0.1s linear'
-              }}
+              style={{ top: `${i * 60}px` }}
             />
           ))}
         </div>
 
-        {/* Mine Options */}
-        <MineOptions 
-          options={currentProblem.options}
-          correctAnswer={currentProblem.correctAnswer}
-          selectedMine={selectedMine}
-          onSelect={handleMineSelection}
-          verticalPosition={tankVerticalPosition}
-        />
+        {/* Falling Mines */}
+        <MineOptions mines={mines} />
 
-        {/* Coins */}
-        {coins.map((coin) => (
-          !coin.collected && (
-            <Coin 
-              key={coin.id}
-              position={{ x: coin.x, y: coin.y }}
-              tankPosition={tankVerticalPosition}
-            />
-          )
+        {/* Falling Coins */}
+        {coins.map(coin => (
+          <Coin 
+            key={coin.id}
+            position={{ x: coin.x, y: coin.y }}
+            collected={coin.collected}
+          />
         ))}
 
         {/* Villain */}
-        <Villain 
-          strength={villainStrength}
-          tankPosition={tankVerticalPosition}
-        />
+        <Villain strength={villainStrength} />
 
         {/* Tank */}
         <Tank 
           position={tankPosition}
           health={tankHealth}
           isMoving={!isPaused && !gameOver}
+          isHit={tankIsHit}
         />
       </div>
 
